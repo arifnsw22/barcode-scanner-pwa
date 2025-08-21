@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barcode Product Lookup</title>
+    <!-- Tailwind CSS CDN for easy styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for better mobile experience */
+        body {
+            font-family: "Inter", sans-serif;
+            background-color: #f0f4f8;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 1rem;
+            box-sizing: border-box;
+        }
+
+        #app-container {
+            background-color: #ffffff;
+            border-radius: 1.5rem; /* More rounded corners */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            padding: 1.5rem;
+            max-width: 450px; /* Max width for better readability on larger screens */
+            width: 100%;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        #interactive {
+            position: relative;
+            width: 100%;
+            height: 220px; /* Adjusted height for smaller scanning window */
+            overflow: hidden;
+            border-radius: 1rem;
+            background-color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 1.125rem; /* text-lg */
+        }
+
+        #interactive video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Ensure video covers the area */
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #interactive canvas {
+            position: absolute; /* Canvas for drawing detection boxes */
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .result-box {
+            background-color: #e2e8f0; /* Default background */
+            border-radius: 0.75rem;
+            padding: 1rem;
+            margin-top: 1rem;
+            text-align: left;
+            color: #2d3748;
+            min-height: 100px; /* Ensure some height even if empty */
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start; /* Align content to start */
+            align-items: flex-start;
+            transition: background-color 0.3s ease-in-out; /* Smooth transition for color change */
+        }
+
+        .result-box p {
+            margin-bottom: 0.5rem;
+        }
+        .result-box strong {
+            color: #1a202c;
+        }
+
+        .button-primary {
+            background-color: #4c51bf; /* Deeper indigo */
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .button-primary:hover {
+            background-color: #3a41a4; /* Darker on hover */
+            transform: translateY(-2px);
+        }
+
+        .button-primary:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+
+        .loading-spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Message box styling */
+        .message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 0.75rem;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            pointer-events: none; /* Allows clicks to pass through when hidden */
+        }
+        .message-box.show {
+            opacity: 1;
+            pointer-events: auto;
+        }
+    </style>
+
+    <!-- PWA Manifest Link -->
+    <link rel="manifest" href="/manifest.json">
+    <!-- Apple Touch Icon (for iOS, but good practice) -->
+    <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+    <!-- Theme color for browser UI -->
+    <meta name="theme-color" content="#4c51bf">
+
+</head>
+<body>
+    <div id="app-container">
+        <h1 class="text-3xl font-bold text-gray-800 mb-4">Barcode Product Lookup</h1>
+
+        <!-- Video area for scanning -->
+        <div id="interactive" class="viewport">
+            <!-- The video stream will be displayed here -->
+            <p id="video-message">Tap "Start Scan" to activate camera</p>
+            <div id="loading-spinner" class="loading-spinner hidden"></div>
+        </div>
+
+        <button id="startButton" class="button-primary mt-4">Start Scan</button>
+        <button id="stopButton" class="button-primary bg-red-600 hover:bg-red-700 hidden">Stop Scan</button>
+
+        <!-- Display area for results -->
+        <div class="result-box" id="resultBox">
+            <p class="text-xl font-semibold mb-2">Result:</p>
+            <p id="barcode-result" class="text-lg"><strong>Barcode:</strong> <span id="scanned-barcode">N/A</span></p>
+            <p id="product-result" class="text-lg"><strong>Product:</strong> <span id="product-name">N/A</span></p>
+            <p id="comment-result" class="text-lg"><strong>Comment:</strong> <span id="product-comment">N/A</span></p>
+        </div>
+    </div>
+
+    <!-- Custom Message Box -->
+    <div id="message-box" class="message-box"></div>
+
+    <!-- QuaggaJS Library -->
+    <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+
+    <script>
+        // Use a IIFE (Immediately Invoked Function Expression) to avoid global scope pollution
+        (function() {
+            // --- UI Elements ---
+            const startButton = document.getElementById('startButton');
+            const stopButton = document.getElementById('stopButton');
+            const interactiveElement = document.getElementById('interactive');
+            const videoMessage = document.getElementById('video-message');
+            const loadingSpinner = document.getElementById('loading-spinner');
+            const scannedBarcodeSpan = document.getElementById('scanned-barcode');
+            const productNameSpan = document.getElementById('product-name');
+            const productCommentSpan = document.getElementById('product-comment');
+            const messageBox = document.getElementById('message-box');
+            const resultBox = document.getElementById('resultBox'); // Get the result box element
+
+            const DEFAULT_RESULT_BOX_COLOR = '#e2e8f0'; // Tailwind gray-200 (initial state)
+            const FOUND_COLOR = '#fecaca'; // Tailwind red-100 for "Found"
+            const NOT_FOUND_COLOR = '#a7f3d0'; // Tailwind green-200 for "Not Found"
+
+            let scannerActive = false; // To track scanner state
+            
+            // --- Product Data - Add your barcodes and product info here! ---
+            // 
+            // 1. Scan your product using the app.
+            // 2. Note the "Barcode:" number that appears in the Result box.
+            // 3. Add a new line below following this format:
+            //    { barcode: 'YOUR_SCANNED_BARCODE_HERE', product: 'Your Product Name', comment: 'Any additional notes' },
+            //    (Make sure to add a comma ',' after each entry, except for the very last one.)
+            //
+            const productDatabase = [
+                { barcode: '9310088010787', product: 'Baby Wipes', comment: 'Don\'t Mark Down' },
+                { barcode: '987654321098', product: 'Whole Wheat Bread', comment: 'Bakery item, use by date MMDDYY' },
+                { barcode: '112233445566', product: 'Milk (1 Gallon)', comment: 'Dairy section, check expiry' },
+                { barcode: '554433221100', product: 'Canned Tomatoes', comment: 'Pantry staple' },
+                { barcode: '789012345678', product: 'Coffee Beans (Dark Roast)', comment: 'Specialty coffee aisle' },
+                { barcode: '123456789012', product: 'Laptop XYZ Model', comment: 'Electronics, Warranty 1 year' },
+                { barcode: '234567890123', product: 'Smartphone ABC', comment: 'High demand item' },
+                { barcode: '345678901234', product: 'Wireless Mouse', comment: 'Computer accessories' },
+                { barcode: '456789012345', product: 'Headphones Pro', comment: 'Audio equipment' }
+                // Add your new products here, like this:
+                // { barcode: '123456789000', product: 'My Awesome Gadget', comment: 'New inventory item' },
+            ];
+
+            // --- Utility Function for Displaying Messages (replaces alert) ---
+            function showMessage(message, duration = 2000) {
+                messageBox.textContent = message;
+                messageBox.classList.add('show');
+                setTimeout(() => {
+                    messageBox.classList.remove('show');
+                }, duration);
+            }
+
+            // --- Function to apply color change effect ---
+            function applyResultColor(isFound) {
+                if (isFound) {
+                    resultBox.style.backgroundColor = FOUND_COLOR; // Remains red if found
+                } else {
+                    resultBox.style.backgroundColor = NOT_FOUND_COLOR; // Remains green if not found
+                }
+            }
+
+            // --- Initialize QuaggaJS Scanner ---
+            function startScanner() {
+                if (scannerActive) return; // Prevent multiple starts
+
+                // Reset display and color to default on new scan start
+                scannedBarcodeSpan.textContent = 'N/A';
+                productNameSpan.textContent = 'N/A';
+                productCommentSpan.textContent = 'N/A';
+                resultBox.style.backgroundColor = DEFAULT_RESULT_BOX_COLOR; // Reset to default on start
+                videoMessage.textContent = 'Initializing camera...';
+                loadingSpinner.classList.remove('hidden');
+
+                Quagga.init({
+                    inputStream : {
+                        name : "Live",
+                        type : "LiveStream",
+                        target: interactiveElement, // Or '#interactive'
+                        constraints: {
+                            facingMode: "environment" // Use the back camera on mobile
+                            // Optional: deviceId: 'your_device_id' if you want a specific camera
+                        }
+                    },
+                    decoder : {
+                        readers : ["ean_reader", "upc_reader", "code_128_reader", "code_39_reader"]
+                        // You can add more barcode types here if needed
+                    }
+                }, function(err) {
+                    loadingSpinner.classList.add('hidden');
+                    if (err) {
+                        console.error(err);
+                        videoMessage.textContent = `Error starting camera: ${err.message || err}`;
+                        showMessage(`Error: ${err.name}. Please allow camera access.`);
+                        startButton.classList.remove('hidden');
+                        stopButton.classList.add('hidden');
+                        scannerActive = false;
+                        return;
+                    }
+                    console.log("Initialization finished. Ready to start");
+                    Quagga.start();
+                    scannerActive = true;
+                    videoMessage.textContent = 'Scanning for barcode...';
+                    startButton.classList.add('hidden'); // Hide start button
+                    stopButton.classList.remove('hidden'); // Show stop button
+                });
+
+                // Listen for detection events
+                Quagga.onDetected(onBarcodeDetected);
+            }
+
+            // --- Stop QuaggaJS Scanner ---
+            function stopScanner() {
+                if (!scannerActive) return;
+
+                Quagga.stop();
+                scannerActive = false;
+                videoMessage.textContent = 'Tap "Start Scan" to activate camera';
+                startButton.classList.remove('hidden');
+                stopButton.classList.add('hidden');
+                console.log("Scanner stopped.");
+            }
+
+            // --- Barcode Detected Handler ---
+            function onBarcodeDetected(result) {
+                const barcode = result.codeResult.code;
+                console.log("Barcode detected:", barcode);
+                scannedBarcodeSpan.textContent = barcode;
+
+                // Look up product in the hardcoded productDatabase
+                const foundProduct = productDatabase.find(
+                    product => product.barcode === barcode
+                );
+
+                if (foundProduct) {
+                    productNameSpan.textContent = foundProduct.product;
+                    productCommentSpan.textContent = foundProduct.comment;
+                    showMessage("Product Found!");
+                    applyResultColor(true); // Apply red color for found
+                } else {
+                    productNameSpan.textContent = "Not Found";
+                    productCommentSpan.textContent = "N/A";
+                    showMessage("Product Not Found!");
+                    applyResultColor(false); // Apply green color for not found
+                }
+
+                // Optionally, stop scanning after a successful detection
+                stopScanner();
+            }
+
+            // --- Event Listeners ---
+            startButton.addEventListener('click', startScanner);
+            stopButton.addEventListener('click', stopScanner);
+
+            // Ensure the scanner is stopped if the page is refreshed or navigated away from
+            window.addEventListener('beforeunload', stopScanner);
+
+            // --- PWA Service Worker Registration ---
+            // Register service worker if supported by the browser
+            if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                    navigator.serviceWorker.register('/service-worker.js')
+                        .then(registration => {
+                            console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                        })
+                        .catch(err => {
+                            console.log('ServiceWorker registration failed: ', err);
+                        });
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
